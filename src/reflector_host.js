@@ -10,7 +10,7 @@ var tsc_wrapped_1 = require('@angular/tsc-wrapped');
 var fs = require('fs');
 var path = require('path');
 var ts = require('typescript');
-var compiler_private_1 = require('./compiler_private');
+var private_import_compiler_1 = require('./private_import_compiler');
 var static_reflector_1 = require('./static_reflector');
 var EXT = /(\.ts|\.d\.ts|\.js|\.jsx|\.tsx)$/;
 var DTS = /\.d\.ts$/;
@@ -27,33 +27,38 @@ var ReflectorHost = (function () {
         // normalize the path so that it never ends with '/'.
         this.basePath = path.normalize(path.join(this.options.basePath, '.')).replace(/\\/g, '/');
         this.genDir = path.normalize(path.join(this.options.genDir, '.')).replace(/\\/g, '/');
-        this.context = context || new NodeReflectorHostContext();
+        this.context = context || new NodeReflectorHostContext(compilerHost);
         var genPath = path.relative(this.basePath, this.genDir);
         this.isGenDirChildOfRootDir = genPath === '' || !genPath.startsWith('..');
     }
     ReflectorHost.prototype.angularImportLocations = function () {
         return {
             coreDecorators: '@angular/core/src/metadata',
-            diDecorators: '@angular/core/src/di/decorators',
+            diDecorators: '@angular/core/src/di/metadata',
             diMetadata: '@angular/core/src/di/metadata',
             diOpaqueToken: '@angular/core/src/di/opaque_token',
             animationMetadata: '@angular/core/src/animation/metadata',
             provider: '@angular/core/src/di/provider'
         };
     };
+    // We use absolute paths on disk as canonical.
+    ReflectorHost.prototype.getCanonicalFileName = function (fileName) { return fileName; };
     ReflectorHost.prototype.resolve = function (m, containingFile) {
-        var resolved = ts.resolveModuleName(m, containingFile.replace(/\\/g, '/'), this.options, this.context).resolvedModule;
+        m = m.replace(EXT, '');
+        var resolved = ts.resolveModuleName(m, containingFile.replace(/\\/g, '/'), this.options, this.context)
+            .resolvedModule;
         return resolved ? resolved.resolvedFileName : null;
     };
     ;
     ReflectorHost.prototype.normalizeAssetUrl = function (url) {
-        var assetUrl = compiler_private_1.AssetUrl.parse(url);
-        return assetUrl ? assetUrl.packageName + "/" + assetUrl.modulePath : null;
+        var assetUrl = private_import_compiler_1.AssetUrl.parse(url);
+        var path = assetUrl ? assetUrl.packageName + "/" + assetUrl.modulePath : null;
+        return this.getCanonicalFileName(path);
     };
     ReflectorHost.prototype.resolveAssetUrl = function (url, containingFile) {
         var assetUrl = this.normalizeAssetUrl(url);
         if (assetUrl) {
-            return this.resolve(assetUrl, containingFile);
+            return this.getCanonicalFileName(this.resolve(assetUrl, containingFile));
         }
         return url;
     };
@@ -172,7 +177,7 @@ var ReflectorHost = (function () {
                 symbol = tc.getAliasedSymbol(symbol);
             }
             var declaration = symbol.getDeclarations()[0];
-            var declarationFile = declaration.getSourceFile().fileName;
+            var declarationFile = this.getCanonicalFileName(declaration.getSourceFile().fileName);
             return this.getStaticSymbol(declarationFile, symbol.getName());
         }
         catch (e) {
@@ -187,11 +192,12 @@ var ReflectorHost = (function () {
      * @param declarationFile the absolute path of the file where the symbol is declared
      * @param name the name of the type.
      */
-    ReflectorHost.prototype.getStaticSymbol = function (declarationFile, name) {
-        var key = "\"" + declarationFile + "\"." + name;
+    ReflectorHost.prototype.getStaticSymbol = function (declarationFile, name, members) {
+        var memberSuffix = members ? "." + members.join('.') : '';
+        var key = "\"" + declarationFile + "\"." + name + memberSuffix;
         var result = this.typeCache.get(key);
         if (!result) {
-            result = new static_reflector_1.StaticSymbol(declarationFile, name);
+            result = new static_reflector_1.StaticSymbol(declarationFile, name, members);
             this.typeCache.set(key, result);
         }
         return result;
@@ -206,7 +212,8 @@ var ReflectorHost = (function () {
         if (DTS.test(filePath)) {
             var metadataPath = filePath.replace(DTS, '.metadata.json');
             if (this.context.fileExists(metadataPath)) {
-                return this.readMetadata(metadataPath);
+                var metadata = this.readMetadata(metadataPath);
+                return (Array.isArray(metadata) && metadata.length == 0) ? undefined : metadata;
             }
         }
         else {
@@ -237,7 +244,7 @@ var ReflectorHost = (function () {
     ReflectorHost.prototype.resolveExportedSymbol = function (filePath, symbolName) {
         var _this = this;
         var resolveModule = function (moduleName) {
-            var resolvedModulePath = _this.resolve(moduleName, filePath);
+            var resolvedModulePath = _this.getCanonicalFileName(_this.resolve(moduleName, filePath));
             if (!resolvedModulePath) {
                 throw new Error("Could not resolve module '" + moduleName + "' relative to file " + filePath);
             }
@@ -290,11 +297,12 @@ var ReflectorHost = (function () {
 }());
 exports.ReflectorHost = ReflectorHost;
 var NodeReflectorHostContext = (function () {
-    function NodeReflectorHostContext() {
+    function NodeReflectorHostContext(host) {
+        this.host = host;
         this.assumedExists = {};
     }
     NodeReflectorHostContext.prototype.fileExists = function (fileName) {
-        return this.assumedExists[fileName] || fs.existsSync(fileName);
+        return this.assumedExists[fileName] || this.host.fileExists(fileName);
     };
     NodeReflectorHostContext.prototype.directoryExists = function (directoryName) {
         try {
