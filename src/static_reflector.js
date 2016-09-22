@@ -401,8 +401,11 @@ var StaticReflector = (function () {
                                     }
                                 }
                                 var member = simplify(expression['member']);
-                                if (selectTarget && isPrimitive(member))
-                                    return simplify(selectTarget[member]);
+                                if (selectTarget && isPrimitive(member)){
+                                    console.log(`member=${member}, selectTarget[member]=${JSON.stringify(selectTarget[member])}`);
+                                    return selectTarget[member];
+                                    //return simplify(selectTarget[member]);
+                                }
                                 return null;
                             case 'reference':
                                 if (!expression.module) {
